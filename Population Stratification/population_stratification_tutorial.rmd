@@ -3,6 +3,8 @@ date: '2023-08-04'
 output:
   html_document:
     keep_md: yes
+editor_options: 
+  chunk_output_type: console
 ---
 
 ### Population Stratification
@@ -38,7 +40,6 @@ This way you can run it in a step-by-step mode. You could also run it directly f
 library(rmarkdown)
 render("path/to/your/file.Rmd")
 ```
-
 Specify your prefix and the path for your working directory and required software in the following chunk:
 ```{r environment-setup}
 if (!require("knitr", quietly = TRUE))
@@ -47,12 +48,12 @@ library(knitr)
 
 # Set your working directory:
 ## Edit 'root.dir' and 'setwd' with the path to your working directory
-knitr::opts_chunk$set(root.dir = "~/Genetic-Sequencing_raw-data/HudsonAlpha_J.Nicholas.Cochran/redlat/array",
+knitr::opts_chunk$set(root.dir = "~/gitcode/genomic-scripts",
                       dev = "png",
                       dpi = 300,
                       echo = FALSE,
                       cache = TRUE)
-setwd("~/Genetic-Sequencing_raw-data/HudsonAlpha_J.Nicholas.Cochran/redlat/array")
+setwd("~/gitcode/genomic-scripts")
 
 # Set up path to software:
 ## Give the paths to plink, king
@@ -62,13 +63,80 @@ Sys.setenv(admixture='/home/acostauribe/bin/admixture')
 Sys.setenv(pong='/home/acostauribe/anaconda3/bin/pong')
 
 # Give the name of your starting file without the .bed or .vcf.gz extension
-prefix='redlat-array.qc.n100'
+prefix='resources/HABLE_GSA_merged'
 Sys.setenv(prefix=prefix)
 
 #Set a color palette that is unambiguous both to colorblinds and non-colorblinds
 col_palette = c( '#4477AA', '#EE6677', '#228833', '#CCBB44', '#66CCEE', '#AA3377', '#BBBBBB')
 ```
 
+```{bash}
+plink \
+  --bfile resources/HABLE_GSA_20220602_FINAL \
+  --bmerge resources/HABLE_GSA_20230418a_FINAL.bed resources/HABLE_GSA_20230418a_FINAL.bim resources/HABLE_GSA_20230418a_FINAL.fam \
+  --make-bed \
+  --out HABLE_GSA_merged
+
+plink --bfile resources/HABLE_GSA_merged --recode vcf --out resources/HABLE_GSA_merged
+
+```
+
+
+
+```{r}
+
+aa_v1_path = 'resources/HD 1 African American 50+ Request 295.csv'
+ma_v1_path = 'resources/HD 1 Mexican American 50+ Request 295.csv'
+nhw_v1_path = 'resources/HD 1 Non-Hispanic White 50+ Request 295.csv'
+
+
+hd_cols = spec(read_csv(nhw_v1_path))
+aa_v1.raw = read_csv(aa_v1_path, col_types = hd_cols,  na = c("", "NA", "9999")) %>%
+  janitor::clean_names() 
+ma_v1.raw = read_csv(ma_v1_path, col_types = hd_cols,  na = c("", "NA", "9999")) %>%
+  janitor::clean_names() 
+nhw_v1.raw = read_csv(nhw_v1_path, col_types = hd_cols,  na = c("", "NA", "9999")) %>%
+  janitor::clean_names() 
+
+habshd.raw <- bind_rows(
+  aa_v1.raw, ma_v1.raw, nhw_v1.raw
+) %>%
+  mutate(
+    id_race_white = as.factor(id_race_white),
+    id_race_black = as.factor(id_race_black),
+    id_race_indian_alaska = as.factor(id_race_indian_alaska),
+    id_race_asian = as.factor(id_race_asian),
+    id_race_japanese = as.factor(id_race_japanese),
+    id_race_korean = as.factor(id_race_korean),
+    id_race_vietnamese = as.factor(id_race_vietnamese),
+    id_race_native_hawaiian = as.factor(id_race_native_hawaiian),
+    id_race_guam_chamorro = as.factor(id_race_guam_chamorro),
+    id_race_samoan = as.factor(id_race_samoan),
+    id_race_other_pacific = as.factor(id_race_other_pacific),
+    id_race_other = as.factor(id_race_other),
+    id_hispanic = as.factor(id_hispanic),
+    id_hispanic_other = as.factor(id_hispanic_other)
+  ) %>%
+  mutate(race = case_when(
+    id_hispanic != 1 ~ "Hispanic", 
+    id_race_white == 1 & id_hispanic != 2 ~ "NHW", 
+    id_race_black == 1 ~ "Black",
+    TRUE ~ "Other"
+  ))
+
+habshd.raw %>% select(med_id, age, id_gender, race)
+
+fam <- read_table("resources/HABLE_GSA_merged.fam", col_names = F)
+
+out <- left_join(fam, habshd.raw %>% select(med_id, age, id_gender, race), by = c("X2" = "med_id")) %>%
+  mutate(
+    race = ifelse(is.na(race), "Unknown", race)
+  ) %>% 
+  select(IID = X2, age, gender = id_gender, POPULATION = race)
+
+write_tsv(out, "intermediate/sample_data.txt")
+
+```
 
 ### Principal Component Analysis
 
@@ -83,7 +151,7 @@ $plink --bfile $prefix --keep $prefix.king.unrelated.txt --make-bed --out $prefi
 
 **2. Retain variants with Minor Allelic Frequency > 10%**
 ```{bash filter-maf, eval=FALSE, include=FALSE}
-$plink --bfile $prefix.unr --maf 0.10 --make-bed --out $prefix.unr.maf
+plink --bfile resources/HABLE_GSA_merged --maf 0.10 --make-bed --out intermediate/HABLE_GSA_merged.maf
 ```
 
 **3. Filter for Linkage Disequilibrium and retain independent markers**
@@ -95,10 +163,10 @@ For LD pruning we will use the following:
 
 ```{bash filter-ld, eval=FALSE, include=FALSE}
 # Identify variants in LD
-$plink --bfile $prefix.unr.maf --indep-pairwise 50 10 0.2 
+plink --bfile intermediate/HABLE_GSA_merged.maf --indep-pairwise 50 10 0.2 
 
 # Retain independent variants
-$plink --bfile $prefix.unr.maf --extract plink.prune.in --make-bed --out $prefix.unr.maf.ld
+plink --bfile intermediate/HABLE_GSA_merged.maf --extract plink.prune.in --make-bed --out intermediate/HABLE_GSA_merged.unr.maf.ld
 ```
 
 **4. Perform a PCA using Plink**
@@ -109,7 +177,7 @@ The 'header' modifier adds a header line to the .eigenvec file(s), and the 'tabs
 
 NOte that plink uses the PCA algorithm from [GCTA](https://yanglab.westlake.edu.cn/software/gcta/#PCA)
 ```{bash pca, eval=FALSE, include=FALSE}
-$plink --bfile $prefix.unr.maf.ld --pca header tabs --out $prefix.unr.maf.ld.pca
+plink --bfile intermediate/HABLE_GSA_merged.unr.maf.ld --pca header tabs --out intermediate/HABLE_GSA_merged.unr.maf.ld.pca
 ```
 
 **Plot the PCA**
@@ -120,13 +188,13 @@ Plink's `prefix.unr.maf.ld.pca.eigenvec.eigenvec` contains the ei
 Load the dataframe we are going to plot: \
 Notice that in our  previous command we determined the output to be separates with tab '\t', and to have a header
 ```{r load-eigendata}
-eigenvec = read.delim(paste0(prefix,".unr.maf.ld.pca.eigenvec"), sep='\t', header=TRUE)
-eigenval = read.delim(paste0(prefix,".unr.maf.ld.pca.eigenval"), sep='\t', header=FALSE)
+eigenvec = read.delim(paste0('intermediate/',prefix,".unr.maf.ld.pca.eigenvec"), sep='\t', header=TRUE)
+eigenval = read.delim(paste0('intermediate/',prefix,".unr.maf.ld.pca.eigenval"), sep='\t', header=FALSE)
 ```
 
 We also need to add the correspondent country or site that each individual belongs to. For the data we will use the `sample_data.txt` dataframe. Using the `match` function, we will create a new column in 'eigenvec'.
 ```{r load-sample-data}
-lookup_dataframe = read.delim("sample_data.txt", header = TRUE )
+lookup_dataframe = read.delim("intermediate/sample_data.txt", header = TRUE )
 eigenvec$POPULATION = lookup_dataframe$POPULATION[match(eigenvec$IID, lookup_dataframe$IID)]
 ```
 
@@ -165,6 +233,29 @@ ggplot(eigenvec, aes(x=PC1, y=PC3, color=POPULATION)) +
             caption="sub-cohorts n=100")
 ```
 
+```{r ternery-plot}
+# Format data for ploting ternery PCA
+dat_tern <- select(eigenvec, PC1, PC2, PC3) %>%
+  mutate(across(starts_with("PC"), ~ . - min(.))) %>%
+  as.matrix() %>%
+  prop.table(1)  %>%
+  as_tibble() %>%
+  bind_cols(select(eigenvec, IID, POPULATION)) %>%
+  mutate(
+    cohort = "HABS-HD",
+    cohort2 = "Sample", 
+    )
+
+ggtern(dat_tern %>% filter(PC2 < 0.2), aes(x = PC1, y = PC2, z = PC3,
+         color = POPULATION)) +
+    geom_point(size = 1) +
+    theme_bw() +
+    theme_showarrows() +
+    theme_notitles() +
+    theme_hidelabels() +
+    theme(text = element_text(size = 10))
+
+```
 
 Perform violin plot of each country vs top Principal Components
 
@@ -266,10 +357,10 @@ do
         for k in $(seq 1 $model) 
         do
                 echo "Starting K of " ${k}
-                $admixture -j4 $prefix.unr.maf.ld.bed --cv ${k} -s time | tee $prefix.unr.maf.ld.K${k}.I${i}.log
+                admixture -j4 intermediate/HABLE_GSA_merged.unr.maf.ld.bed --cv ${k} -s time | tee intermediate/HABLE_GSA_merged.unr.maf.ld.K${k}.I${i}.log
                 #creates $prefix.unr.maf.ld.${k}.P, $PREFIX.unr.maf.ld.${k}.Q and $prefix.unr.maf.ld.K${k}.I${i}.log
                 
-                mv $prefix.unr.maf.ld.K${k}.* ./Iteration_${i}
+                mv intermediate/HABLE_GSA_merged.unr.maf.ld.K${k}.* ./Iteration_${i}
                 mv *.P ./Iteration_${i}
                 mv *.Q ./Iteration_${i}
                 echo "Finished K of " ${k}
@@ -277,6 +368,7 @@ do
         echo "Finished" Iteration_${i}
 done
 ```
+
 Each run of admixture will create the following files:
 - *prefix.unr.maf.ld.{k}.P* each line is a variant
 - *prefix.unr.maf.ld.{k}.Q *
@@ -300,6 +392,7 @@ do
         done
 done
 ```
+
 
 We can use a bash function called 'sed' to edit $prefix.CVerror.txt.
 ``sed -i 's/STRING_TO_REPLACE/STRING_TO_REPLACE_IT/g' filename``
